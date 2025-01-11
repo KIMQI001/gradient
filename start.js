@@ -34,6 +34,12 @@ if (proxies.length === 0) {
     const name = `gradient-${index++}`
     execSync(`PROXY=${proxy} APP_USER='${USER}' APP_PASS='${PASSWORD}' pm2 start app.js --name ${name} -l ${name}.log`)
     console.log(`-> 已使用代理 ${proxy} 启动 ${name}`)
+    
+    // 如果不是最后一个实例，等待10秒
+    if (index < proxies.length) {
+      console.log('-> 等待10秒后启动下一个实例...')
+      execSync('sleep 10')
+    }
   }
 
   // 3. 保存代理到文件

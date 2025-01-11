@@ -242,6 +242,7 @@ async function getProxyIpInfo(driver, proxyUrl) {
     )
 
     console.log("-> 扩展已加载!")
+    takeScreenshot(driver, "extension-loaded.png")
 
     try {
       const gotItButton = await driver.findElement(
@@ -285,20 +286,15 @@ async function getProxyIpInfo(driver, proxyUrl) {
     console.log("-> 状态:", supportStatus)
 
     if (supportStatus.includes("Disconnected")) {
-      console.log(
-        "-> 连接失败! 请检查以下内容: ",
-      )
+      console.log("-> 当前状态: Disconnected, 等待重连...")
       console.log(`
-    - 确保代理正常工作,可以通过 'curl -vv -x ${PROXY} https://myip.ipip.net' 检查
-    - 确保 docker 镜像是最新的,通过 'docker pull overtrue/gradient-bot' 更新并重启容器
-    - 官方服务本身不太稳定。所以看到异常情况是正常的。耐心等待它会自动重启
-    - 如果您使用免费代理,可能被官方服务封禁。请尝试其他静态住宅代理
+    提示：
+    - Disconnected 状态是正常的，请耐心等待自动重连
+    - 如果长时间未重连，可能是代理问题，请检查代理状态
+    - 建议使用稳定的住宅代理
   `)
-      await generateErrorReport(driver)
-      await driver.quit()
-      setTimeout(() => {
-        process.exit(1)
-      }, 5000)
+      // 继续保持会话，不退出
+      await new Promise(resolve => setTimeout(resolve, 10000)); // 等待10秒后继续
     }
 
     console.log("-> 已连接! 开始运行...")
@@ -311,15 +307,21 @@ async function getProxyIpInfo(driver, proxyUrl) {
 
     console.log("-> 已启动!")
 
-    setInterval(() => {
-      driver.getTitle().then((title) => {
-        console.log(`-> [${USER}] 运行中...`, title)
-      })
+    setInterval(async () => {
+      try {
+        const title = await driver.getTitle()
+        
+        // 重新获取 supportStatus
+        const statusElement = await driver.findElement(By.css(".absolute.mt-3.right-0.z-10"))
+        const currentStatus = await statusElement.getText()
 
-      if (PROXY) {
-        console.log(`-> [${USER}] 使用代理 ${PROXY} 运行中...`)
-      } else {
-        console.log(`-> [${USER}] 未使用代理运行中...`)
+        if (PROXY) {
+          console.log(`-> [${USER}] 使用代理 ${PROXY} 运行中... (标题: ${title}, 状态: ${currentStatus})`)
+        } else {
+          console.log(`-> [${USER}] 未使用代理运行中... (标题: ${title}, 状态: ${currentStatus})`)
+        }
+      } catch (error) {
+        console.log("-> 状态更新失败:", error.message)
       }
     }, 30000)
   } catch (error) {
