@@ -1,5 +1,5 @@
 node_modules/
-*.log
-.DS_Store
+.env
+logs/
 config.txt
 proxies.txt
