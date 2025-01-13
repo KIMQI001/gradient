@@ -20,7 +20,7 @@ export APP_PASS=your_password
 2. 配置代理
 在 `proxies.txt` 中添加代理地址，每行一个：
 ```
-http://username:password@host:port
+http://username:password@host:port  
 ```
 
 3. 启动服务

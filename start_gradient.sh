@@ -44,10 +44,13 @@ if [ ! -z "$existing_container" ]; then
     docker rm "$existing_container"
 fi
 
+
 # 启动新容器
+group=$1
+container_name="gradient-${group}"
 echo "启动 Gradient 容器..."
 docker run -d \
-    --name gradient-bot \
+    --name $container_name \
     --restart unless-stopped \
     -e APP_USER="$email" \
     -e APP_PASS="$password" \
