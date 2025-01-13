@@ -37,12 +37,15 @@ if ! docker info > /dev/null 2>&1; then
 fi
 
 # 停止已存在的容器
-existing_container=$(docker ps -q --filter "ancestor=overtrue/gradient-bot")
-if [ ! -z "$existing_container" ]; then
-    echo "停止已存在的容器..."
-    docker stop "$existing_container"
-    docker rm "$existing_container"
-fi
+# existing_container=$(docker ps -q --filter "ancestor=overtrue/gradient-bot")
+# if [ ! -z "$existing_container" ]; then
+#     echo "停止已存在的容器..."
+#     docker stop "$existing_container"
+#     docker rm "$existing_container"
+# fi
+# 清理同组的旧容器
+echo "清理旧容器 gradient-$GROUP-*..."
+docker ps -a | grep "gradient-$GROUP-" | awk '{print $1}' | xargs -r docker rm -f
 
 
 # 启动新容器
