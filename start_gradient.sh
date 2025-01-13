@@ -63,7 +63,7 @@ docker run -d \
 if [ $? -eq 0 ]; then
     echo "Gradient 容器已成功启动！"
     echo "容器日志："
-    docker logs -f gradient-bot
+    docker logs -f $container_name
 else
     echo "错误: 容器启动失败"
     exit 1
