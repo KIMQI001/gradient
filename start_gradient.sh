@@ -43,13 +43,15 @@ fi
 #     docker stop "$existing_container"
 #     docker rm "$existing_container"
 # fi
-# 清理同组的旧容器
-echo "清理旧容器 gradient-$GROUP-*..."
-docker ps -a | grep "gradient-$GROUP-" | awk '{print $1}' | xargs -r docker rm -f
 
 
-# 启动新容器
+
+
 group=$1
+# 清理同组的旧容器
+echo "清理旧容器 gradient-$group"
+docker ps -a | grep "gradient-$group" | awk '{print $1}' | xargs -r docker rm -f
+# 启动新容器
 container_name="gradient-${group}"
 echo "启动 Gradient 容器..."
 docker run -d \
