@@ -57,6 +57,7 @@ echo "启动 Gradient 容器..."
 docker run -d \
     --name $container_name \
     --restart unless-stopped \
+    --ulimit nofile=65535:65535 \
     -e APP_USER="$email" \
     -e APP_PASS="$password" \
     -e NODE_ENV=development \

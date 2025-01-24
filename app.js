@@ -93,42 +93,34 @@ async function generateErrorReport(driver) {
 async function getDriverOptions() {
   const options = new chrome.Options()
 
+  // 基础设置
   options.addArguments("--headless")
   options.addArguments("--single-process")
   options.addArguments(`user-agent=${USER_AGENT}`)
-  options.addArguments("--remote-allow-origins=*")
-  options.addArguments("--disable-dev-shm-usage")
-  options.addArguments('enable-automation')
+  
+  // 内存和性能优化
+  options.addArguments("--disable-dev-shm-usage")  // 禁用/dev/shm使用
+  options.addArguments("--disable-gpu")  // 禁用GPU
+  options.addArguments("--js-flags=--max-old-space-size=512")
+  options.addArguments("--disk-cache-size=1")
+  options.addArguments("--disable-extensions")  // 禁用扩展
+  options.addArguments("--disable-software-rasterizer")
+  
+  // 减少文件描述符使用
+  options.addArguments("--no-sandbox")  // 禁用沙箱
+  options.addArguments("--disable-logging")  // 禁用日志
+  options.addArguments("--disable-dev-tools")  // 禁用开发者工具
+  options.addArguments("--disable-browser-side-navigation")  // 禁用浏览器端导航
+  options.addArguments("--disable-site-isolation-trials")  // 禁用站点隔离
+  options.addArguments("--disable-features=site-per-process")  // 禁用每个进程一个站点
+  options.addArguments("--disable-ipc-flooding-protection")  // 禁用IPC洪水保护
+  
+  // 窗口设置
   options.addArguments("--window-size=1920,1080")
   options.addArguments("--start-maximized")
-  options.addArguments("--disable-renderer-backgrounding")
-  options.addArguments("--disable-background-timer-throttling")
-  options.addArguments("--disable-backgrounding-occluded-windows")
-  options.addArguments("--disable-low-res-tiling")
-  options.addArguments("--disable-client-side-phishing-detection")
-  options.addArguments("--disable-crash-reporter")
-  options.addArguments("--disable-oopr-debug-crash-dump")
-  options.addArguments("--disable-infobars")
-  options.addArguments("--dns-prefetch-disable")
-  options.addArguments("--disable-crash-reporter")
-  options.addArguments("--disable-in-process-stack-traces")
-  options.addArguments("--disable-popup-blocking")
-  options.addArguments("--disable-gpu")
-  options.addArguments("--disable-web-security")
-  options.addArguments("--disable-default-apps")
-  options.addArguments("--ignore-certificate-errors")
-  options.addArguments("--ignore-ssl-errors")
-  options.addArguments("--no-sandbox")
-  options.addArguments("--no-crash-upload")
-  options.addArguments("--no-zygote")
-  options.addArguments("--no-first-run")
-  options.addArguments("--no-default-browser-check")
-  options.addArguments("--remote-allow-origins=*")
-  options.addArguments("--allow-running-insecure-content")
-  options.addArguments("--enable-unsafe-swiftshader")
 
   if (!ALLOW_DEBUG) {
-    // options.addArguments("--blink-settings=imagesEnabled=false")
+    options.addArguments("--blink-settings=imagesEnabled=false")
   }
 
   if (PROXY) {
@@ -178,6 +170,26 @@ async function getProxyIpInfo(driver, proxyUrl) {
   }
 }
 
+// 添加超时设置函数
+async function setPageTimeout(driver) {
+  await driver.manage().setTimeouts({
+    implicit: 10000,  // 隐式等待
+    pageLoad: 30000,  // 页面加载超时
+    script: 30000     // 脚本执行超时
+  });
+}
+
+// 清理浏览器数据
+async function clearBrowserData(driver) {
+  try {
+    await driver.manage().deleteAllCookies();
+    await driver.executeScript('window.localStorage.clear();');
+    await driver.executeScript('window.sessionStorage.clear();');
+  } catch (error) {
+    console.log('清理浏览器数据时出错:', error);
+  }
+}
+
 (async () => {
   await downloadExtension(extensionId)
 
@@ -202,6 +214,9 @@ async function getProxyIpInfo(driver, proxyUrl) {
       .build()
 
     console.log("-> 浏览器已启动!")
+
+    // 设置超时
+    await setPageTimeout(driver);
 
     if (PROXY) {
       try {
@@ -306,6 +321,13 @@ async function getProxyIpInfo(driver, proxyUrl) {
     })
 
     console.log("-> 已启动!")
+
+    // 定期清理数据
+    setInterval(async () => {
+      if (driver) {
+        await clearBrowserData(driver);
+      }
+    }, 5 * 60 * 1000); // 每5分钟清理一次
 
     setInterval(async () => {
       try {
