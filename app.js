@@ -1,370 +1,181 @@
-const { Builder, By, until, Capabilities } = require("selenium-webdriver")
-const chrome = require("selenium-webdriver/chrome")
-const url = require("url")
-const fs = require("fs")
-const crypto = require("crypto")
-const request = require("request")
-const path = require("path")
-const FormData = require("form-data")
-const proxy = require("selenium-webdriver/proxy")
-const proxyChain = require("proxy-chain")
-require('console-stamp')(console, {
-  format: ':date(yyyy/mm/dd HH:MM:ss.l)'
-})
-require("dotenv").config()
+const { Builder, By, until } = require("selenium-webdriver");
+const chrome = require("selenium-webdriver/chrome");
+const proxy = require("selenium-webdriver/proxy");
+const proxyChain = require("proxy-chain");
+const https = require('https');
+const path = require('path');
+const fs = require('fs');
+require("dotenv").config();
 
-const extensionId = "caacbgbklghmpodbdafajbgdnegacfmo"
-const CRX_URL = `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=98.0.4758.102&acceptformat=crx2,crx3&x=id%3D${extensionId}%26uc&nacl_arch=x86-64`
-const USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36"
+const USER = process.env.APP_USER;
+const PASSWORD = process.env.APP_PASS;
+const PROXY = process.env.PROXY;
+const EXTENSION_ID = "caacbgbklghmpodbdafajbgdnegacfmo";
+const CRX_PATH = path.join(__dirname, "extension.crx");
 
-const USER = process.env.APP_USER || ""
-const PASSWORD = process.env.APP_PASS || ""
-const ALLOW_DEBUG = !!process.env.DEBUG?.length || false
-const EXTENSION_FILENAME = "app.crx"
-const PROXY = process.env.PROXY || undefined
+if (!USER || !PASSWORD) process.exit(1);
 
-console.log("-> 启动中...")
-console.log("-> 用户:", USER)
-console.log("-> 密码:", PASSWORD)
-console.log("-> 代理:", PROXY)
-console.log("-> 调试模式:", ALLOW_DEBUG)
-
-if (!USER || !PASSWORD) {
-  console.error("请设置 APP_USER 和 APP_PASS 环境变量")
-  process.exit()
-}
-
-if (ALLOW_DEBUG) {
-  console.log(
-    "-> 调试模式已启用! 错误时会生成截图和控制台日志!"
-  )
-}
-
-async function downloadExtension(extensionId) {
-  const url = CRX_URL.replace(extensionId, extensionId)
-  const headers = { "User-Agent": USER_AGENT }
-
-  console.log("-> 正在从以下地址下载扩展:", url)
-
-  if (fs.existsSync(EXTENSION_FILENAME) && fs.statSync(EXTENSION_FILENAME).mtime > Date.now() - 86400000) {
-    console.log("-> 扩展已下载! 跳过下载...")
-    return
+// 优化的CRX下载函数
+async function downloadCRX() {
+  // 如果文件存在且不超过24小时，直接使用
+  if (fs.existsSync(CRX_PATH)) {
+    const stats = fs.statSync(CRX_PATH);
+    if (Date.now() - stats.mtimeMs < 24 * 60 * 60 * 1000) {
+      return;
+    }
   }
 
   return new Promise((resolve, reject) => {
-    request({ url, headers, encoding: null }, (error, response, body) => {
-      if (error) {
-        console.error("下载扩展时出错:", error)
-        return reject(error)
+    const url = `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=98.0.4758.102&acceptformat=crx2,crx3&x=id%3D${EXTENSION_ID}%26uc`;
+    
+    https.get(url, response => {
+      if (response.statusCode !== 200) {
+        reject(new Error(`HTTP ${response.statusCode}`));
+        return;
       }
-      fs.writeFileSync(EXTENSION_FILENAME, body)
-      if (ALLOW_DEBUG) {
-        const md5 = crypto.createHash("md5").update(body).digest("hex")
-        console.log("-> 扩展 MD5: " + md5)
-      }
-      resolve()
-    })
-  })
-}
 
-async function takeScreenshot(driver, filename) {
-  if (!ALLOW_DEBUG) return;  // 如果不是调试模式，直接返回
-  try {
-    const data = await driver.takeScreenshot()
-    fs.writeFileSync(filename, Buffer.from(data, "base64"))
-  } catch (error) {
-    console.log('截图失败:', error);
-  }
-}
-
-async function generateErrorReport(driver) {
-  if (!ALLOW_DEBUG) return;  // 如果不是调试模式，直接返回
-  try {
-    const dom = await driver.findElement(By.css("html")).getAttribute("outerHTML")
-    fs.writeFileSync("error.html", dom)
-    await takeScreenshot(driver, "error.png")
-    const logs = await driver.manage().logs().get("browser")
-    fs.writeFileSync(
-      "error.log",
-      logs.map((log) => `${log.level.name}: ${log.message}`).join("\n")
-    )
-  } catch (error) {
-    console.log('生成错误报告失败:', error);
-  }
-}
-
-async function getDriverOptions() {
-  const options = new chrome.Options()
-
-  // 基础设置
-  options.addArguments("--headless")
-  options.addArguments("--single-process")
-  options.addArguments(`user-agent=${USER_AGENT}`)
-  
-  // 内存和性能优化
-  options.addArguments("--disable-dev-shm-usage")  // 禁用/dev/shm使用
-  options.addArguments("--disable-gpu")  // 禁用GPU
-  options.addArguments("--js-flags=--max-old-space-size=512")
-  options.addArguments("--disk-cache-size=1")
-  options.addArguments("--disable-extensions")  // 禁用扩展
-  options.addArguments("--disable-software-rasterizer")
-  
-  // 减少文件描述符使用
-  options.addArguments("--no-sandbox")  // 禁用沙箱
-  options.addArguments("--disable-logging")  // 禁用日志
-  options.addArguments("--disable-dev-tools")  // 禁用开发者工具
-  options.addArguments("--disable-browser-side-navigation")  // 禁用浏览器端导航
-  options.addArguments("--disable-site-isolation-trials")  // 禁用站点隔离
-  options.addArguments("--disable-features=site-per-process")  // 禁用每个进程一个站点
-  options.addArguments("--disable-ipc-flooding-protection")  // 禁用IPC洪水保护
-  
-  // 窗口设置
-  options.addArguments("--window-size=1920,1080")
-  options.addArguments("--start-maximized")
-
-  if (!ALLOW_DEBUG) {
-    options.addArguments("--blink-settings=imagesEnabled=false")
-  }
-
-  if (PROXY) {
-    console.log("-> 设置代理中...", PROXY)
-
-    let proxyUrl = PROXY
-
-    if (!proxyUrl.includes("://")) {
-      proxyUrl = `http://${proxyUrl}`
-    }
-
-    const newProxyUrl = await proxyChain.anonymizeProxy(proxyUrl)
-
-    console.log("-> 新代理地址:", newProxyUrl)
-
-    options.setProxy(
-      proxy.manual({
-        http: newProxyUrl,
-        https: newProxyUrl,
-      })
-    )
-    const url = new URL(newProxyUrl)
-    console.log("-> 代理主机:", url.hostname)
-    console.log("-> 代理端口:", url.port)
-    options.addArguments(`--proxy-server=socks5://${url.hostname}:${url.port}`)
-    console.log("-> 代理设置完成!")
-  } else {
-    console.log("-> 未设置代理!")
-  }
-
-  return options
-}
-
-async function getProxyIpInfo(driver, proxyUrl) {
-  const url = "https://myip.ipip.net"
-
-  console.log("-> 获取代理IP信息:", proxyUrl)
-
-  try {
-    await driver.get(url)
-    await driver.wait(until.elementLocated(By.css("body")), 30000)
-    const pageText = await driver.findElement(By.css("body")).getText()
-    console.log("-> 代理IP信息:", pageText)
-  } catch (error) {
-    console.error("-> 获取代理IP信息失败:", error)
-    throw new Error("获取代理IP信息失败!")
-  }
-}
-
-// 添加超时设置函数
-async function setPageTimeout(driver) {
-  await driver.manage().setTimeouts({
-    implicit: 10000,  // 隐式等待
-    pageLoad: 30000,  // 页面加载超时
-    script: 30000     // 脚本执行超时
+      const writeStream = fs.createWriteStream(CRX_PATH);
+      response.pipe(writeStream);
+      
+      writeStream.on('finish', () => {
+        writeStream.close();
+        resolve();
+      });
+      
+      writeStream.on('error', err => {
+        fs.unlink(CRX_PATH, () => reject(err));
+      });
+    }).on('error', reject);
   });
 }
 
-// 清理浏览器数据
-async function clearBrowserData(driver) {
-  try {
-    await driver.manage().deleteAllCookies();
-    await driver.executeScript('window.localStorage.clear();');
-    await driver.executeScript('window.sessionStorage.clear();');
-  } catch (error) {
-    console.log('清理浏览器数据时出错:', error);
+async function getDriverOptions() {
+  const options = new chrome.Options();
+  options.addArguments(
+    "--headless",
+    "--single-process",
+    "--no-sandbox",
+    "--no-zygote",
+    "--disable-gpu",
+    "--disable-dev-shm-usage",
+    "--disable-dev-tools",
+    "--disable-software-rasterizer",
+    "--disable-logging",
+    "--disable-browser-side-navigation",
+    "--disable-site-isolation-trials",
+    "--disable-features=site-per-process",
+    "--disable-ipc-flooding-protection",
+    "--disable-default-apps",
+    "--disable-popup-blocking",
+    "--disable-sync",
+    "--disable-remote-fonts",
+    "--disable-client-side-phishing-detection",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-domain-reliability",
+    "--disable-breakpad",
+    "--disable-notifications",
+    "--mute-audio",
+    "--no-default-browser-check",
+    "--no-first-run",
+    "--password-store=basic",
+    "--use-mock-keychain",
+    "--force-gpu-mem-available-mb=32",
+    "--js-flags=--max-old-space-size=64",
+    "--memory-pressure-off",
+    "--disk-cache-size=1",
+    "--media-cache-size=1",
+    "--window-size=800,600",
+    "--blink-settings=imagesEnabled=false"
+  );
+
+  // 添加扩展
+  options.addExtensions(CRX_PATH);
+
+  if (PROXY) {
+    const proxyUrl = PROXY.includes("://") ? PROXY : `http://${PROXY}`;
+    const newProxyUrl = await proxyChain.anonymizeProxy(proxyUrl);
+    options.setProxy(proxy.manual({http: newProxyUrl, https: newProxyUrl}));
   }
+
+  return options;
 }
 
 (async () => {
-  await downloadExtension(extensionId)
+  let driver;
+  const RETRY_DELAY = 60000;  // 1分钟重试延迟
+  const CHECK_INTERVAL = 60000;  // 1分钟检查间隔
+  const MAX_RETRIES = 3;
+  let retryCount = 0;
 
-  const options = await getDriverOptions()
-
-  options.addExtensions(path.resolve(__dirname, EXTENSION_FILENAME))
-
-  console.log(`-> 扩展已添加! ${EXTENSION_FILENAME}`)
-
-  if (ALLOW_DEBUG) {
-    options.addArguments("--enable-logging")
-    options.addArguments("--v=1")
-  }
-
-  let driver
-  try {
-    console.log("-> 启动浏览器...")
-
-    driver = await new Builder()
-      .forBrowser("chrome")
-      .setChromeOptions(options)
-      .build()
-
-    console.log("-> 浏览器已启动!")
-
-    // 设置超时
-    await setPageTimeout(driver);
-
-    if (PROXY) {
-      try {
-        await getProxyIpInfo(driver, PROXY)
-      } catch (error) {
-        throw new Error("获取代理IP信息失败，请通过命令 'curl -vv -x ${PROXY} https://myip.ipip.net' 检查代理")
-      }
-    }
-
-    console.log("-> 已启动! 正在登录 https://app.gradient.network/...")
-    await driver.get("https://app.gradient.network/")
-
-    const emailInput = By.css('[placeholder="Enter Email"]')
-    const passwordInput = By.css('[type="password"]')
-    const loginButton = By.css("button")
-
-    await driver.wait(until.elementLocated(emailInput), 30000)
-    await driver.wait(until.elementLocated(passwordInput), 30000)
-    await driver.wait(until.elementLocated(loginButton), 30000)
-
-    await driver.findElement(emailInput).sendKeys(USER)
-    await driver.findElement(passwordInput).sendKeys(PASSWORD)
-    await driver.findElement(loginButton).click()
-
-    await driver.wait(until.elementLocated(By.css('a[href="/dashboard/setting"]')), 30000)
-
-    console.log("-> 已登录! 等待打开扩展...")
-
-    takeScreenshot(driver, "logined.png")
-
-    await driver.get(`chrome-extension://${extensionId}/popup.html`)
-
-    console.log("-> 扩展已打开!")
-
-    await driver.wait(
-      until.elementLocated(By.xpath('//div[contains(text(), "Status")]')),
-      30000
-    )
-
-    console.log("-> 扩展已加载!")
-    takeScreenshot(driver, "extension-loaded.png")
-
-    try {
-      const gotItButton = await driver.findElement(
-        By.xpath('//button[contains(text(), "I got it")]')
-      )
-      await gotItButton.click()
-      console.log('-> "我知道了"按钮已点击!')
-    } catch (error) {
-      const dom = await driver
-        .findElement(By.css("html"))
-        .getAttribute("outerHTML")
-      fs.writeFileSync("dom.html", dom)
-      console.error('-> 未找到 "我知道了" 按钮!(跳过)')
-    }
-
-    try {
-      const notAvailable = await driver.findElement(
-        By.xpath(
-          '//*[contains(text(), "Sorry, Gradient is not yet available in your region.")]'
-        )
-      )
-      console.log("-> 抱歉,Gradient 在您所在的地区暂不可用。")
-      await driver.quit()
-      process.exit(1)
-    } catch (error) {
-      console.log("-> Gradient 在您所在的地区可用。")
-    }
-
-    const supportStatus = await driver
-      .findElement(By.css(".absolute.mt-3.right-0.z-10"))
-      .getText()
-
-    if (ALLOW_DEBUG) {
-      const dom = await driver
-        .findElement(By.css("html"))
-        .getAttribute("outerHTML")
-      fs.writeFileSync("dom.html", dom)
-      await takeScreenshot(driver, "status.png")
-    }
-
-    console.log("-> 状态:", supportStatus)
-
-    if (supportStatus.includes("Disconnected")) {
-      console.log("-> 当前状态: Disconnected, 等待重连...")
-      console.log(`
-    提示：
-    - Disconnected 状态是正常的，请耐心等待自动重连
-    - 如果长时间未重连，可能是代理问题，请检查代理状态
-    - 建议使用稳定的住宅代理
-  `)
-      // 继续保持会话，不退出
-      await new Promise(resolve => setTimeout(resolve, 10000)); // 等待10秒后继续
-    }
-
-    console.log("-> 已连接! 开始运行...")
-
-    takeScreenshot(driver, "connected.png")
-
-    console.log({
-      support_status: supportStatus,
-    })
-
-    console.log("-> 已启动!")
-
-    let lastStatus = '';
-    setInterval(async () => {
-      if (!driver) return;
-      
-      try {
-        // 清理浏览器数据
-        await clearBrowserData(driver);
-        
-        // 获取状态
-        const statusElement = await driver.findElement(By.css(".absolute.mt-3.right-0.z-10"));
-        const currentStatus = await statusElement.getText();
-        
-        // 只有状态变化时才打印日志
-        if (currentStatus !== lastStatus) {
-          const title = await driver.getTitle();
-          if (PROXY) {
-            console.log(`-> [${USER}] 使用代理 ${PROXY} 运行中... (标题: ${title}, 状态: ${currentStatus})`);
-          } else {
-            console.log(`-> [${USER}] 未使用代理运行中... (标题: ${title}, 状态: ${currentStatus})`);
-          }
-          lastStatus = currentStatus;
-        }
-      } catch (error) {
-        if (!error.message.includes('stale element')) {  // 忽略stale element错误
-          console.log("-> 状态更新失败:", error.message);
-        }
-      }
-    }, 30000);  // 30秒检查一次
-  } catch (error) {
-    console.error("发生错误:", error)
-    console.error(error.stack)
-
+  const cleanup = async () => {
     if (driver) {
-      await generateErrorReport(driver)
-      console.error("-> 错误报告已生成!")
-      console.error(fs.readFileSync("error.log").toString())
-      driver.quit()
+      try {
+        await driver.quit();
+      } catch {}
     }
+  };
 
-    process.exit(1)
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+  process.on('uncaughtException', cleanup);
+
+  // 下载扩展
+  try {
+    await downloadCRX();
+  } catch {
+    process.exit(1);
   }
-})()
+
+  while (true) {
+    try {
+      if (!driver) {
+        driver = await new Builder()
+          .forBrowser("chrome")
+          .setChromeOptions(await getDriverOptions())
+          .build();
+
+        await driver.manage().setTimeouts({
+          implicit: 5000,
+          pageLoad: 15000,
+          script: 15000
+        });
+
+        // 登录
+        await driver.get("https://app.gradient.network/");
+        await driver.findElement(By.css('[placeholder="Enter Email"]')).sendKeys(USER);
+        await driver.findElement(By.css('[type="password"]')).sendKeys(PASSWORD);
+        await driver.findElement(By.css("button")).click();
+        await driver.wait(until.elementLocated(By.css('a[href="/dashboard/setting"]')), 15000);
+
+        // 打开扩展
+        await driver.get(`chrome-extension://${EXTENSION_ID}/popup.html`);
+        await driver.wait(until.elementLocated(By.xpath('//div[contains(text(), "Status")]')), 15000);
+
+        try {
+          await driver.findElement(By.xpath('//button[contains(text(), "I got it")]')).click();
+        } catch {}
+      }
+
+      // 检查状态
+      const status = await driver.findElement(By.css(".absolute.mt-3.right-0.z-10")).getText();
+      if (status.includes("Disconnected")) {
+        throw new Error("Disconnected");
+      }
+      
+      retryCount = 0;
+      await new Promise(r => setTimeout(r, CHECK_INTERVAL));
+
+    } catch (error) {
+      await cleanup();
+      driver = null;
+
+      if (++retryCount >= MAX_RETRIES) {
+        process.exit(1);
+      }
+
+      await new Promise(r => setTimeout(r, RETRY_DELAY));
+    }
+  }
+})();
