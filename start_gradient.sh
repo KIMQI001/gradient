@@ -56,14 +56,24 @@ container_name="gradient-${group}"
 echo "启动 Gradient 容器..."
 docker run -d \
     --name $container_name \
-    --restart unless-stopped \
+    --restart on-failure:3 \
     --ulimit nofile=65535:65535 \
+    --stop-timeout 30 \
     -e APP_USER="$email" \
     -e APP_PASS="$password" \
     -e NODE_ENV=development \
     -v "$(pwd)/$PROXIES_FILE:/app/proxies.txt" \
     -v "$(pwd)/app.js:/app/app.js" \
     overtrue/gradient-bot
+
+# 设置信号处理
+cleanup() {
+    echo "正在停止容器 $container_name..."
+    docker stop -t 30 $container_name >/dev/null 2>&1
+    exit 0
+}
+
+trap cleanup SIGINT SIGTERM
 
 # 检查容器是否成功启动
 if [ $? -eq 0 ]; then

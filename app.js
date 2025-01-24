@@ -161,37 +161,20 @@ async function getDriverOptions() {
       // 检查状态
       const status = await driver.findElement(By.css(".absolute.mt-3.right-0.z-10")).getText();
       if (status.includes("Disconnected")) {
-        console.log(`[${USER}] 状态: Disconnected, 准备重连...`);
         throw new Error("Disconnected");
-      }
-
-      // 只在状态变化时打印
-      if (!global.lastStatus || global.lastStatus !== status) {
-        const title = await driver.getTitle();
-        if (PROXY) {
-          console.log(`[${USER}] 代理: ${PROXY} | 状态: ${status} | 标题: ${title}`);
-        } else {
-          console.log(`[${USER}] 状态: ${status} | 标题: ${title}`);
-        }
-        global.lastStatus = status;
       }
       
       retryCount = 0;
       await new Promise(r => setTimeout(r, CHECK_INTERVAL));
 
     } catch (error) {
-      if (error.message !== "Disconnected") {
-        console.log(`[${USER}] 错误: ${error.message}`);
-      }
       await cleanup();
       driver = null;
 
       if (++retryCount >= MAX_RETRIES) {
-        console.log(`[${USER}] 达到最大重试次数(${MAX_RETRIES})，退出程序`);
         process.exit(1);
       }
 
-      console.log(`[${USER}] 第 ${retryCount}/${MAX_RETRIES} 次重试...`);
       await new Promise(r => setTimeout(r, RETRY_DELAY));
     }
   }
