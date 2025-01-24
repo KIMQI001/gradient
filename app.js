@@ -2,9 +2,7 @@ const { Builder, By, until } = require("selenium-webdriver");
 const chrome = require("selenium-webdriver/chrome");
 const proxy = require("selenium-webdriver/proxy");
 const proxyChain = require("proxy-chain");
-const https = require('https');
 const path = require('path');
-const fs = require('fs');
 require("dotenv").config();
 
 const USER = process.env.APP_USER;
@@ -17,39 +15,6 @@ let isShuttingDown = false;
 let driver = null;
 
 if (!USER || !PASSWORD) process.exit(1);
-
-// 优化的CRX下载函数
-async function downloadCRX() {
-  if (fs.existsSync(CRX_PATH)) {
-    const stats = fs.statSync(CRX_PATH);
-    if (Date.now() - stats.mtimeMs < 24 * 60 * 60 * 1000) {
-      return;
-    }
-  }
-
-  return new Promise((resolve, reject) => {
-    const url = `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=98.0.4758.102&acceptformat=crx2,crx3&x=id%3D${EXTENSION_ID}%26uc`;
-    
-    https.get(url, response => {
-      if (response.statusCode !== 200) {
-        reject(new Error(`HTTP ${response.statusCode}`));
-        return;
-      }
-
-      const writeStream = fs.createWriteStream(CRX_PATH);
-      response.pipe(writeStream);
-      
-      writeStream.on('finish', () => {
-        writeStream.close();
-        resolve();
-      });
-      
-      writeStream.on('error', err => {
-        fs.unlink(CRX_PATH, () => reject(err));
-      });
-    }).on('error', reject);
-  });
-}
 
 async function getDriverOptions() {
   const options = new chrome.Options();
@@ -115,14 +80,12 @@ async function cleanup() {
     driver = null;
   }
   
-  // 确保所有资源都清理完毕
   setTimeout(() => {
     console.log('清理完成，正常退出');
     process.exit(0);
   }, 1000);
 }
 
-// 信号处理
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
 process.on('uncaughtException', async (err) => {
@@ -135,13 +98,6 @@ process.on('unhandledRejection', async (err) => {
 });
 
 async function main() {
-  try {
-    await downloadCRX();
-  } catch (err) {
-    console.error('下载扩展失败:', err);
-    process.exit(1);
-  }
-
   const RETRY_DELAY = 60000;
   const CHECK_INTERVAL = 60000;
   const MAX_RETRIES = 3;
@@ -206,7 +162,6 @@ async function main() {
   }
 }
 
-// 启动主程序
 main().catch(async (err) => {
   console.error('主程序异常:', err);
   await cleanup();
