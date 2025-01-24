@@ -190,8 +190,8 @@ async function initializeDriver() {
       return true;
     } catch (error) {
       console.error('连接失败:', error.message);
-      console.log('5秒后重试...');
-      await new Promise(r => setTimeout(r, 5000));
+      console.log('10秒后重试...');
+      await new Promise(r => setTimeout(r, 10000));
     }
   }
   return false;
