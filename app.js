@@ -1,256 +1,340 @@
-const { Builder, By, until } = require("selenium-webdriver");
-const chrome = require("selenium-webdriver/chrome");
-const proxy = require("selenium-webdriver/proxy");
-const proxyChain = require("proxy-chain");
-const path = require('path');
-require("dotenv").config();
+const { Builder, By, until, Capabilities } = require("selenium-webdriver")
+const chrome = require("selenium-webdriver/chrome")
+const url = require("url")
+const fs = require("fs")
+const crypto = require("crypto")
+const request = require("request")
+const path = require("path")
+const FormData = require("form-data")
+const proxy = require("selenium-webdriver/proxy")
+const proxyChain = require("proxy-chain")
+require('console-stamp')(console, {
+  format: ':date(yyyy/mm/dd HH:MM:ss.l)'
+})
+require("dotenv").config()
 
-const USER = process.env.APP_USER;
-const PASSWORD = process.env.APP_PASS;
-const PROXY = process.env.PROXY;
-const EXTENSION_ID = "caacbgbklghmpodbdafajbgdnegacfmo";
-const CRX_PATH = path.join(__dirname, "app.crx");
+const extensionId = "caacbgbklghmpodbdafajbgdnegacfmo"
+const CRX_URL = `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=98.0.4758.102&acceptformat=crx2,crx3&x=id%3D${extensionId}%26uc&nacl_arch=x86-64`
+const USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36"
 
-let isShuttingDown = false;
-let driver = null;
-let proxyServer = null;
+const USER = process.env.APP_USER || ""
+const PASSWORD = process.env.APP_PASS || ""
+const ALLOW_DEBUG = !!process.env.DEBUG?.length || false
+const EXTENSION_FILENAME = "app.crx"
+const PROXY = process.env.PROXY || undefined
 
-if (!USER || !PASSWORD) process.exit(1);
+console.log("-> 启动中...")
+console.log("-> 用户:", USER)
+console.log("-> 密码:", PASSWORD)
+console.log("-> 代理:", PROXY)
+console.log("-> 调试模式:", ALLOW_DEBUG)
 
-async function setupProxy() {
-  if (!PROXY) return null;
-  try {
-    const proxyUrl = PROXY.includes("://") ? PROXY : `http://${PROXY}`;
-    const newProxyUrl = await proxyChain.anonymizeProxy(proxyUrl);
-    return newProxyUrl;
-  } catch (error) {
-    console.error('代理设置失败:', error.message);
-    return null;
+if (!USER || !PASSWORD) {
+  console.error("请设置 APP_USER 和 APP_PASS 环境变量")
+  process.exit()
+}
+
+if (ALLOW_DEBUG) {
+  console.log(
+    "-> 调试模式已启用! 错误时会生成截图和控制台日志!"
+  )
+}
+
+async function downloadExtension(extensionId) {
+  const url = CRX_URL.replace(extensionId, extensionId)
+  const headers = { "User-Agent": USER_AGENT }
+
+  console.log("-> 正在从以下地址下载扩展:", url)
+
+  if (fs.existsSync(EXTENSION_FILENAME) && fs.statSync(EXTENSION_FILENAME).mtime > Date.now() - 86400000) {
+    console.log("-> 扩展已下载! 跳过下载...")
+    return
   }
+
+  return new Promise((resolve, reject) => {
+    request({ url, headers, encoding: null }, (error, response, body) => {
+      if (error) {
+        console.error("下载扩展时出错:", error)
+        return reject(error)
+      }
+      fs.writeFileSync(EXTENSION_FILENAME, body)
+      if (ALLOW_DEBUG) {
+        const md5 = crypto.createHash("md5").update(body).digest("hex")
+        console.log("-> 扩展 MD5: " + md5)
+      }
+      resolve()
+    })
+  })
+}
+
+async function takeScreenshot(driver, filename) {
+  if (!ALLOW_DEBUG) {
+    return
+  }
+
+  const data = await driver.takeScreenshot()
+  fs.writeFileSync(filename, Buffer.from(data, "base64"))
+}
+
+async function generateErrorReport(driver) {
+  const dom = await driver.findElement(By.css("html")).getAttribute("outerHTML")
+  fs.writeFileSync("error.html", dom)
+
+  await takeScreenshot(driver, "error.png")
+
+  const logs = await driver.manage().logs().get("browser")
+  fs.writeFileSync(
+    "error.log",
+    logs.map((log) => `${log.level.name}: ${log.message}`).join("\n")
+  )
 }
 
 async function getDriverOptions() {
-  const options = new chrome.Options();
-  options.addArguments(
-    "--headless",
-    "--single-process",
-    "--no-sandbox",
-    "--no-zygote",
-    "--disable-gpu",
-    "--disable-dev-shm-usage",
-    "--disable-dev-tools",
-    "--disable-software-rasterizer",
-    "--disable-logging",
-    "--disable-browser-side-navigation",
-    "--disable-site-isolation-trials",
-    "--disable-features=site-per-process",
-    "--disable-ipc-flooding-protection",
-    "--disable-default-apps",
-    "--disable-popup-blocking",
-    "--disable-sync",
-    "--disable-remote-fonts",
-    "--disable-client-side-phishing-detection",
-    "--disable-component-extensions-with-background-pages",
-    "--disable-background-networking",
-    "--disable-component-update",
-    "--disable-domain-reliability",
-    "--disable-breakpad",
-    "--disable-notifications",
-    "--mute-audio",
-    "--no-default-browser-check",
-    "--no-first-run",
-    "--password-store=basic",
-    "--use-mock-keychain",
-    "--force-gpu-mem-available-mb=32",
-    "--js-flags=--max-old-space-size=64",
-    "--memory-pressure-off",
-    "--disk-cache-size=1",
-    "--media-cache-size=1",
-    "--window-size=800,600",
-    "--blink-settings=imagesEnabled=false",
-    "--proxy-bypass-list=<-loopback>",  // 绕过本地连接
-    "--ignore-certificate-errors",       // 忽略证书错误
-    "--disable-web-security"            // 禁用web安全策略
-  );
+  const options = new chrome.Options()
 
-  options.addExtensions(CRX_PATH);
+  options.addArguments("--headless")
+  options.addArguments("--single-process")
+  options.addArguments(`user-agent=${USER_AGENT}`)
+  options.addArguments("--remote-allow-origins=*")
+  options.addArguments("--disable-dev-shm-usage")
+  options.addArguments('enable-automation')
+  options.addArguments("--window-size=1920,1080")
+  options.addArguments("--start-maximized")
+  options.addArguments("--disable-renderer-backgrounding")
+  options.addArguments("--disable-background-timer-throttling")
+  options.addArguments("--disable-backgrounding-occluded-windows")
+  options.addArguments("--disable-low-res-tiling")
+  options.addArguments("--disable-client-side-phishing-detection")
+  options.addArguments("--disable-crash-reporter")
+  options.addArguments("--disable-oopr-debug-crash-dump")
+  options.addArguments("--disable-infobars")
+  options.addArguments("--dns-prefetch-disable")
+  options.addArguments("--disable-crash-reporter")
+  options.addArguments("--disable-in-process-stack-traces")
+  options.addArguments("--disable-popup-blocking")
+  options.addArguments("--disable-gpu")
+  options.addArguments("--disable-web-security")
+  options.addArguments("--disable-default-apps")
+  options.addArguments("--ignore-certificate-errors")
+  options.addArguments("--ignore-ssl-errors")
+  options.addArguments("--no-sandbox")
+  options.addArguments("--no-crash-upload")
+  options.addArguments("--no-zygote")
+  options.addArguments("--no-first-run")
+  options.addArguments("--no-default-browser-check")
+  options.addArguments("--remote-allow-origins=*")
+  options.addArguments("--allow-running-insecure-content")
+  options.addArguments("--enable-unsafe-swiftshader")
+
+  if (!ALLOW_DEBUG) {
+    // options.addArguments("--blink-settings=imagesEnabled=false")
+  }
 
   if (PROXY) {
-    const proxyUrl = await setupProxy();
-    if (proxyUrl) {
-      options.setProxy(proxy.manual({http: proxyUrl, https: proxyUrl}));
+    console.log("-> 设置代理中...", PROXY)
+
+    let proxyUrl = PROXY
+
+    if (!proxyUrl.includes("://")) {
+      proxyUrl = `http://${proxyUrl}`
     }
+
+    const newProxyUrl = await proxyChain.anonymizeProxy(proxyUrl)
+
+    console.log("-> 新代理地址:", newProxyUrl)
+
+    options.setProxy(
+      proxy.manual({
+        http: newProxyUrl,
+        https: newProxyUrl,
+      })
+    )
+    const url = new URL(newProxyUrl)
+    console.log("-> 代理主机:", url.hostname)
+    console.log("-> 代理端口:", url.port)
+    options.addArguments(`--proxy-server=socks5://${url.hostname}:${url.port}`)
+    console.log("-> 代理设置完成!")
+  } else {
+    console.log("-> 未设置代理!")
   }
 
-  return options;
+  return options
 }
 
-async function cleanup() {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
-  
-  console.log('正在清理资源...');
-  if (driver) {
-    try {
-      await driver.quit();
-    } catch {}
-    driver = null;
-  }
+async function getProxyIpInfo(driver, proxyUrl) {
+  const url = "https://myip.ipip.net"
 
-  if (proxyServer) {
-    try {
-      await proxyChain.closeAnonymizedProxy(proxyServer, true);
-    } catch {}
-    proxyServer = null;
+  console.log("-> 获取代理IP信息:", proxyUrl)
+
+  try {
+    await driver.get(url)
+    await driver.wait(until.elementLocated(By.css("body")), 30000)
+    const pageText = await driver.findElement(By.css("body")).getText()
+    console.log("-> 代理IP信息:", pageText)
+  } catch (error) {
+    console.error("-> 获取代理IP信息失败:", error)
+    throw new Error("获取代理IP信息失败!")
   }
-  
-  setTimeout(() => {
-    console.log('清理完成，正常退出');
-    process.exit(0);
-  }, 1000);
 }
 
-process.on('SIGINT', cleanup);
-process.on('SIGTERM', cleanup);
-process.on('uncaughtException', async (err) => {
-  console.error('未捕获的异常:', err);
-  await cleanup();
-});
-process.on('unhandledRejection', async (err) => {
-  console.error('未处理的Promise拒绝:', err);
-  await cleanup();
-});
+(async () => {
+  await downloadExtension(extensionId)
 
-async function waitForElement(locator, timeout = 15000) {
-  const startTime = Date.now();
-  while (Date.now() - startTime < timeout) {
-    try {
-      const element = await driver.findElement(locator);
-      if (await element.isDisplayed()) {
-        return element;
-      }
-    } catch {}
-    await new Promise(r => setTimeout(r, 1000));
+  const options = await getDriverOptions()
+
+  options.addExtensions(path.resolve(__dirname, EXTENSION_FILENAME))
+
+  console.log(`-> 扩展已添加! ${EXTENSION_FILENAME}`)
+
+  if (ALLOW_DEBUG) {
+    options.addArguments("--enable-logging")
+    options.addArguments("--v=1")
   }
-  throw new Error(`等待元素超时: ${locator}`);
-}
 
-async function initializeDriver() {
-  while (!isShuttingDown) {
-    try {
-      if (driver) {
-        try {
-          await driver.quit();
-        } catch {}
-        driver = null;
-      }
+  let driver
+  try {
+    console.log("-> 启动浏览器...")
 
-      console.log('正在初始化浏览器...');
-      driver = await new Builder()
-        .forBrowser("chrome")
-        .setChromeOptions(await getDriverOptions())
-        .build();
+    driver = await new Builder()
+      .forBrowser("chrome")
+      .setChromeOptions(options)
+      .build()
 
-      await driver.manage().setTimeouts({
-        implicit: 5000,
-        pageLoad: 30000,  // 增加页面加载超时
-        script: 30000
-      });
+    console.log("-> 浏览器已启动!")
 
-      // 尝试登录
-      console.log('尝试登录...');
-      await driver.get("https://app.gradient.network/");
-      
-      // 等待并填写登录表单
-      const emailInput = await waitForElement(By.css('[placeholder="Enter Email"]'));
-      const passwordInput = await waitForElement(By.css('[type="password"]'));
-      const loginButton = await waitForElement(By.css("button"));
-
-      await emailInput.sendKeys(USER);
-      await passwordInput.sendKeys(PASSWORD);
-      await loginButton.click();
-
-      // 等待登录成功
-      await waitForElement(By.css('a[href="/dashboard/setting"]'));
-      console.log('登录成功！');
-
-      // 打开扩展
-      console.log('正在打开扩展...');
-      await driver.get(`chrome-extension://${EXTENSION_ID}/popup.html`);
-      await waitForElement(By.xpath('//div[contains(text(), "Status")]'));
-
+    if (PROXY) {
       try {
-        const gotItButton = await driver.findElement(By.xpath('//button[contains(text(), "I got it")]'));
-        if (await gotItButton.isDisplayed()) {
-          await gotItButton.click();
-        }
-      } catch {}
-
-      console.log('初始化成功！');
-      return true;
-    } catch (error) {
-      console.error('连接失败:', error.message);
-      console.log('10秒后重试...');
-      await new Promise(r => setTimeout(r, 10000));
+        await getProxyIpInfo(driver, PROXY)
+      } catch (error) {
+        throw new Error("获取代理IP信息失败，请通过命令 'curl -vv -x ${PROXY} https://myip.ipip.net' 检查代理")
+      }
     }
-  }
-  return false;
-}
 
-async function main() {
-  const CHECK_INTERVAL = 60000;
-  const MAX_RETRIES = 3;
-  let retryCount = 0;
+    console.log("-> 已启动! 正在登录 https://app.gradient.network/...")
+    await driver.get("https://app.gradient.network/")
 
-  if (!await initializeDriver()) {
-    console.error('无法建立连接，程序退出');
-    process.exit(1);
-  }
+    const emailInput = By.css('[placeholder="Enter Email"]')
+    const passwordInput = By.css('[type="password"]')
+    const loginButton = By.css("button")
 
-  while (!isShuttingDown) {
+    await driver.wait(until.elementLocated(emailInput), 30000)
+    await driver.wait(until.elementLocated(passwordInput), 30000)
+    await driver.wait(until.elementLocated(loginButton), 30000)
+
+    await driver.findElement(emailInput).sendKeys(USER)
+    await driver.findElement(passwordInput).sendKeys(PASSWORD)
+    await driver.findElement(loginButton).click()
+
+    await driver.wait(until.elementLocated(By.css('a[href="/dashboard/setting"]')), 30000)
+
+    console.log("-> 已登录! 等待打开扩展...")
+
+    takeScreenshot(driver, "logined.png")
+
+    await driver.get(`chrome-extension://${extensionId}/popup.html`)
+
+    console.log("-> 扩展已打开!")
+
+    await driver.wait(
+      until.elementLocated(By.xpath('//div[contains(text(), "Status")]')),
+      30000
+    )
+
+    console.log("-> 扩展已加载!")
+    takeScreenshot(driver, "extension-loaded.png")
+
     try {
-      if (!driver) {
-        console.log('重新连接中...');
-        if (!await initializeDriver()) {
-          break;
-        }
-        retryCount = 0;
-      }
-
-      const status = await waitForElement(By.css(".absolute.mt-3.right-0.z-10"));
-      const statusText = await status.getText();
-      
-      if (statusText.includes("Disconnected")) {
-        throw new Error("Disconnected");
-      }
-      
-      console.log('状态正常:', statusText);
-      retryCount = 0;
-      await new Promise(r => setTimeout(r, CHECK_INTERVAL));
-
+      const gotItButton = await driver.findElement(
+        By.xpath('//button[contains(text(), "I got it")]')
+      )
+      await gotItButton.click()
+      console.log('-> "我知道了"按钮已点击!')
     } catch (error) {
-      if (isShuttingDown) break;
-      
-      console.error('发生错误:', error.message);
-      if (driver) {
-        try {
-          await driver.quit();
-        } catch {}
-        driver = null;
-      }
-
-      if (++retryCount >= MAX_RETRIES) {
-        console.error('达到最大重试次数，退出程序');
-        await cleanup();
-        break;
-      }
-
-      console.log(`开始第 ${retryCount}/${MAX_RETRIES} 次重试...`);
+      const dom = await driver
+        .findElement(By.css("html"))
+        .getAttribute("outerHTML")
+      fs.writeFileSync("dom.html", dom)
+      console.error('-> 未找到 "我知道了" 按钮!(跳过)')
     }
-  }
-}
 
-main().catch(async (err) => {
-  console.error('主程序异常:', err);
-  await cleanup();
-});
+    try {
+      const notAvailable = await driver.findElement(
+        By.xpath(
+          '//*[contains(text(), "Sorry, Gradient is not yet available in your region.")]'
+        )
+      )
+      console.log("-> 抱歉,Gradient 在您所在的地区暂不可用。")
+      await driver.quit()
+      process.exit(1)
+    } catch (error) {
+      console.log("-> Gradient 在您所在的地区可用。")
+    }
+
+    const supportStatus = await driver
+      .findElement(By.css(".absolute.mt-3.right-0.z-10"))
+      .getText()
+
+    if (ALLOW_DEBUG) {
+      const dom = await driver
+        .findElement(By.css("html"))
+        .getAttribute("outerHTML")
+      fs.writeFileSync("dom.html", dom)
+      await takeScreenshot(driver, "status.png")
+    }
+
+    console.log("-> 状态:", supportStatus)
+
+    if (supportStatus.includes("Disconnected")) {
+      console.log("-> 当前状态: Disconnected, 等待重连...")
+      console.log(`
+    提示：
+    - Disconnected 状态是正常的，请耐心等待自动重连
+    - 如果长时间未重连，可能是代理问题，请检查代理状态
+    - 建议使用稳定的住宅代理
+  `)
+      // 继续保持会话，不退出
+      await new Promise(resolve => setTimeout(resolve, 10000)); // 等待10秒后继续
+    }
+
+    console.log("-> 已连接! 开始运行...")
+
+    takeScreenshot(driver, "connected.png")
+
+    console.log({
+      support_status: supportStatus,
+    })
+
+    console.log("-> 已启动!")
+
+    setInterval(async () => {
+      try {
+        const title = await driver.getTitle()
+        
+        // 重新获取 supportStatus
+        const statusElement = await driver.findElement(By.css(".absolute.mt-3.right-0.z-10"))
+        const currentStatus = await statusElement.getText()
+
+        if (PROXY) {
+          console.log(`-> [${USER}] 使用代理 ${PROXY} 运行中... (标题: ${title}, 状态: ${currentStatus})`)
+        } else {
+          console.log(`-> [${USER}] 未使用代理运行中... (标题: ${title}, 状态: ${currentStatus})`)
+        }
+      } catch (error) {
+        console.log("-> 状态更新失败:", error.message)
+      }
+    }, 30000)
+  } catch (error) {
+    console.error("发生错误:", error)
+    console.error(error.stack)
+
+    if (driver) {
+      await generateErrorReport(driver)
+      console.error("-> 错误报告已生成!")
+      console.error(fs.readFileSync("error.log").toString())
+      driver.quit()
+    }
+
+    process.exit(1)
+  }
+})()
