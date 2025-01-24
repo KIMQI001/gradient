@@ -36,34 +36,37 @@ if ! docker info > /dev/null 2>&1; then
     exit 1
 fi
 
-# 停止已存在的容器
-# existing_container=$(docker ps -q --filter "ancestor=overtrue/gradient-bot")
-# if [ ! -z "$existing_container" ]; then
-#     echo "停止已存在的容器..."
-#     docker stop "$existing_container"
-#     docker rm "$existing_container"
-# fi
-
-
-
-
 group=$1
 # 清理同组的旧容器
 echo "清理旧容器 gradient-$group"
 docker ps -a | grep "gradient-$group" | awk '{print $1}' | xargs -r docker rm -f
+
 # 启动新容器
 container_name="gradient-${group}"
 echo "启动 Gradient 容器..."
+
+# 创建专用网络（如果不存在）
+if ! docker network inspect gradient-net >/dev/null 2>&1; then
+    docker network create --driver bridge gradient-net
+fi
+
 docker run -d \
     --name $container_name \
+    --network gradient-net \
+    --dns 8.8.8.8 \
+    --dns 8.8.4.4 \
     --restart on-failure:3 \
     --ulimit nofile=65535:65535 \
     --stop-timeout 30 \
+    --memory="256m" \
+    --memory-swap="512m" \
+    --cpus=0.5 \
     -e APP_USER="$email" \
     -e APP_PASS="$password" \
     -e NODE_ENV=development \
-    -v "$(pwd)/$PROXIES_FILE:/app/proxies.txt" \
-    -v "$(pwd)/app.js:/app/app.js" \
+    -v "$(pwd)/$PROXIES_FILE:/app/proxies.txt:ro" \
+    -v "$(pwd)/app.js:/app/app.js:ro" \
+    -v "$(pwd)/app.crx:/app/app.crx:ro" \
     overtrue/gradient-bot
 
 # 设置信号处理

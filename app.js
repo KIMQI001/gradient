@@ -13,8 +13,21 @@ const CRX_PATH = path.join(__dirname, "app.crx");
 
 let isShuttingDown = false;
 let driver = null;
+let proxyServer = null;
 
 if (!USER || !PASSWORD) process.exit(1);
+
+async function setupProxy() {
+  if (!PROXY) return null;
+  try {
+    const proxyUrl = PROXY.includes("://") ? PROXY : `http://${PROXY}`;
+    const newProxyUrl = await proxyChain.anonymizeProxy(proxyUrl);
+    return newProxyUrl;
+  } catch (error) {
+    console.error('代理设置失败:', error.message);
+    return null;
+  }
+}
 
 async function getDriverOptions() {
   const options = new chrome.Options();
@@ -54,15 +67,19 @@ async function getDriverOptions() {
     "--disk-cache-size=1",
     "--media-cache-size=1",
     "--window-size=800,600",
-    "--blink-settings=imagesEnabled=false"
+    "--blink-settings=imagesEnabled=false",
+    "--proxy-bypass-list=<-loopback>",  // 绕过本地连接
+    "--ignore-certificate-errors",       // 忽略证书错误
+    "--disable-web-security"            // 禁用web安全策略
   );
 
   options.addExtensions(CRX_PATH);
 
   if (PROXY) {
-    const proxyUrl = PROXY.includes("://") ? PROXY : `http://${PROXY}`;
-    const newProxyUrl = await proxyChain.anonymizeProxy(proxyUrl);
-    options.setProxy(proxy.manual({http: newProxyUrl, https: newProxyUrl}));
+    const proxyUrl = await setupProxy();
+    if (proxyUrl) {
+      options.setProxy(proxy.manual({http: proxyUrl, https: proxyUrl}));
+    }
   }
 
   return options;
@@ -78,6 +95,13 @@ async function cleanup() {
       await driver.quit();
     } catch {}
     driver = null;
+  }
+
+  if (proxyServer) {
+    try {
+      await proxyChain.closeAnonymizedProxy(proxyServer, true);
+    } catch {}
+    proxyServer = null;
   }
   
   setTimeout(() => {
@@ -97,9 +121,31 @@ process.on('unhandledRejection', async (err) => {
   await cleanup();
 });
 
+async function waitForElement(locator, timeout = 15000) {
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeout) {
+    try {
+      const element = await driver.findElement(locator);
+      if (await element.isDisplayed()) {
+        return element;
+      }
+    } catch {}
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  throw new Error(`等待元素超时: ${locator}`);
+}
+
 async function initializeDriver() {
   while (!isShuttingDown) {
     try {
+      if (driver) {
+        try {
+          await driver.quit();
+        } catch {}
+        driver = null;
+      }
+
+      console.log('正在初始化浏览器...');
       driver = await new Builder()
         .forBrowser("chrome")
         .setChromeOptions(await getDriverOptions())
@@ -107,37 +153,44 @@ async function initializeDriver() {
 
       await driver.manage().setTimeouts({
         implicit: 5000,
-        pageLoad: 15000,
-        script: 15000
+        pageLoad: 30000,  // 增加页面加载超时
+        script: 30000
       });
 
       // 尝试登录
       console.log('尝试登录...');
       await driver.get("https://app.gradient.network/");
-      await driver.findElement(By.css('[placeholder="Enter Email"]')).sendKeys(USER);
-      await driver.findElement(By.css('[type="password"]')).sendKeys(PASSWORD);
-      await driver.findElement(By.css("button")).click();
-      await driver.wait(until.elementLocated(By.css('a[href="/dashboard/setting"]')), 15000);
+      
+      // 等待并填写登录表单
+      const emailInput = await waitForElement(By.css('[placeholder="Enter Email"]'));
+      const passwordInput = await waitForElement(By.css('[type="password"]'));
+      const loginButton = await waitForElement(By.css("button"));
+
+      await emailInput.sendKeys(USER);
+      await passwordInput.sendKeys(PASSWORD);
+      await loginButton.click();
+
+      // 等待登录成功
+      await waitForElement(By.css('a[href="/dashboard/setting"]'));
+      console.log('登录成功！');
 
       // 打开扩展
-      console.log('打开扩展...');
+      console.log('正在打开扩展...');
       await driver.get(`chrome-extension://${EXTENSION_ID}/popup.html`);
-      await driver.wait(until.elementLocated(By.xpath('//div[contains(text(), "Status")]')), 15000);
+      await waitForElement(By.xpath('//div[contains(text(), "Status")]'));
 
       try {
-        await driver.findElement(By.xpath('//button[contains(text(), "I got it")]')).click();
+        const gotItButton = await driver.findElement(By.xpath('//button[contains(text(), "I got it")]'));
+        if (await gotItButton.isDisplayed()) {
+          await gotItButton.click();
+        }
       } catch {}
 
       console.log('初始化成功！');
       return true;
     } catch (error) {
-      console.error('连接失败，5秒后重试:', error.message);
-      if (driver) {
-        try {
-          await driver.quit();
-        } catch {}
-        driver = null;
-      }
+      console.error('连接失败:', error.message);
+      console.log('5秒后重试...');
       await new Promise(r => setTimeout(r, 5000));
     }
   }
@@ -149,7 +202,6 @@ async function main() {
   const MAX_RETRIES = 3;
   let retryCount = 0;
 
-  // 初始化连接
   if (!await initializeDriver()) {
     console.error('无法建立连接，程序退出');
     process.exit(1);
@@ -165,12 +217,14 @@ async function main() {
         retryCount = 0;
       }
 
-      const status = await driver.findElement(By.css(".absolute.mt-3.right-0.z-10")).getText();
-      if (status.includes("Disconnected")) {
+      const status = await waitForElement(By.css(".absolute.mt-3.right-0.z-10"));
+      const statusText = await status.getText();
+      
+      if (statusText.includes("Disconnected")) {
         throw new Error("Disconnected");
       }
       
-      console.log('状态正常:', status);
+      console.log('状态正常:', statusText);
       retryCount = 0;
       await new Promise(r => setTimeout(r, CHECK_INTERVAL));
 
