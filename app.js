@@ -13,11 +13,13 @@ const PROXY = process.env.PROXY;
 const EXTENSION_ID = "caacbgbklghmpodbdafajbgdnegacfmo";
 const CRX_PATH = path.join(__dirname, "extension.crx");
 
+let isShuttingDown = false;
+let driver = null;
+
 if (!USER || !PASSWORD) process.exit(1);
 
 // 优化的CRX下载函数
 async function downloadCRX() {
-  // 如果文件存在且不超过24小时，直接使用
   if (fs.existsSync(CRX_PATH)) {
     const stats = fs.statSync(CRX_PATH);
     if (Date.now() - stats.mtimeMs < 24 * 60 * 60 * 1000) {
@@ -90,7 +92,6 @@ async function getDriverOptions() {
     "--blink-settings=imagesEnabled=false"
   );
 
-  // 添加扩展
   options.addExtensions(CRX_PATH);
 
   if (PROXY) {
@@ -102,33 +103,51 @@ async function getDriverOptions() {
   return options;
 }
 
-(async () => {
-  let driver;
-  const RETRY_DELAY = 60000;  // 1分钟重试延迟
-  const CHECK_INTERVAL = 60000;  // 1分钟检查间隔
-  const MAX_RETRIES = 3;
-  let retryCount = 0;
+async function cleanup() {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  
+  console.log('正在清理资源...');
+  if (driver) {
+    try {
+      await driver.quit();
+    } catch {}
+    driver = null;
+  }
+  
+  // 确保所有资源都清理完毕
+  setTimeout(() => {
+    console.log('清理完成，正常退出');
+    process.exit(0);
+  }, 1000);
+}
 
-  const cleanup = async () => {
-    if (driver) {
-      try {
-        await driver.quit();
-      } catch {}
-    }
-  };
+// 信号处理
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);
+process.on('uncaughtException', async (err) => {
+  console.error('未捕获的异常:', err);
+  await cleanup();
+});
+process.on('unhandledRejection', async (err) => {
+  console.error('未处理的Promise拒绝:', err);
+  await cleanup();
+});
 
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
-  process.on('uncaughtException', cleanup);
-
-  // 下载扩展
+async function main() {
   try {
     await downloadCRX();
-  } catch {
+  } catch (err) {
+    console.error('下载扩展失败:', err);
     process.exit(1);
   }
 
-  while (true) {
+  const RETRY_DELAY = 60000;
+  const CHECK_INTERVAL = 60000;
+  const MAX_RETRIES = 3;
+  let retryCount = 0;
+
+  while (!isShuttingDown) {
     try {
       if (!driver) {
         driver = await new Builder()
@@ -142,14 +161,12 @@ async function getDriverOptions() {
           script: 15000
         });
 
-        // 登录
         await driver.get("https://app.gradient.network/");
         await driver.findElement(By.css('[placeholder="Enter Email"]')).sendKeys(USER);
         await driver.findElement(By.css('[type="password"]')).sendKeys(PASSWORD);
         await driver.findElement(By.css("button")).click();
         await driver.wait(until.elementLocated(By.css('a[href="/dashboard/setting"]')), 15000);
 
-        // 打开扩展
         await driver.get(`chrome-extension://${EXTENSION_ID}/popup.html`);
         await driver.wait(until.elementLocated(By.xpath('//div[contains(text(), "Status")]')), 15000);
 
@@ -158,7 +175,6 @@ async function getDriverOptions() {
         } catch {}
       }
 
-      // 检查状态
       const status = await driver.findElement(By.css(".absolute.mt-3.right-0.z-10")).getText();
       if (status.includes("Disconnected")) {
         throw new Error("Disconnected");
@@ -168,14 +184,30 @@ async function getDriverOptions() {
       await new Promise(r => setTimeout(r, CHECK_INTERVAL));
 
     } catch (error) {
-      await cleanup();
-      driver = null;
-
-      if (++retryCount >= MAX_RETRIES) {
-        process.exit(1);
+      if (isShuttingDown) break;
+      
+      console.error('发生错误:', error);
+      if (driver) {
+        try {
+          await driver.quit();
+        } catch {}
+        driver = null;
       }
 
+      if (++retryCount >= MAX_RETRIES) {
+        console.error('达到最大重试次数，退出程序');
+        await cleanup();
+        break;
+      }
+
+      console.log(`${retryCount}/${MAX_RETRIES} 次重试，等待 ${RETRY_DELAY/1000} 秒...`);
       await new Promise(r => setTimeout(r, RETRY_DELAY));
     }
   }
-})();
+}
+
+// 启动主程序
+main().catch(async (err) => {
+  console.error('主程序异常:', err);
+  await cleanup();
+});
