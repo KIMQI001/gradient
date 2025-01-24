@@ -9,7 +9,7 @@ const USER = process.env.APP_USER;
 const PASSWORD = process.env.APP_PASS;
 const PROXY = process.env.PROXY;
 const EXTENSION_ID = "caacbgbklghmpodbdafajbgdnegacfmo";
-const CRX_PATH = path.join(__dirname, "extension.crx");
+const CRX_PATH = path.join(__dirname, "app.crx");
 
 let isShuttingDown = false;
 let driver = null;
