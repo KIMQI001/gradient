@@ -97,38 +97,72 @@ process.on('unhandledRejection', async (err) => {
   await cleanup();
 });
 
+async function initializeDriver() {
+  while (!isShuttingDown) {
+    try {
+      driver = await new Builder()
+        .forBrowser("chrome")
+        .setChromeOptions(await getDriverOptions())
+        .build();
+
+      await driver.manage().setTimeouts({
+        implicit: 5000,
+        pageLoad: 15000,
+        script: 15000
+      });
+
+      // 尝试登录
+      console.log('尝试登录...');
+      await driver.get("https://app.gradient.network/");
+      await driver.findElement(By.css('[placeholder="Enter Email"]')).sendKeys(USER);
+      await driver.findElement(By.css('[type="password"]')).sendKeys(PASSWORD);
+      await driver.findElement(By.css("button")).click();
+      await driver.wait(until.elementLocated(By.css('a[href="/dashboard/setting"]')), 15000);
+
+      // 打开扩展
+      console.log('打开扩展...');
+      await driver.get(`chrome-extension://${EXTENSION_ID}/popup.html`);
+      await driver.wait(until.elementLocated(By.xpath('//div[contains(text(), "Status")]')), 15000);
+
+      try {
+        await driver.findElement(By.xpath('//button[contains(text(), "I got it")]')).click();
+      } catch {}
+
+      console.log('初始化成功！');
+      return true;
+    } catch (error) {
+      console.error('连接失败，5秒后重试:', error.message);
+      if (driver) {
+        try {
+          await driver.quit();
+        } catch {}
+        driver = null;
+      }
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+  return false;
+}
+
 async function main() {
-  const RETRY_DELAY = 60000;
   const CHECK_INTERVAL = 60000;
   const MAX_RETRIES = 3;
   let retryCount = 0;
 
+  // 初始化连接
+  if (!await initializeDriver()) {
+    console.error('无法建立连接，程序退出');
+    process.exit(1);
+  }
+
   while (!isShuttingDown) {
     try {
       if (!driver) {
-        driver = await new Builder()
-          .forBrowser("chrome")
-          .setChromeOptions(await getDriverOptions())
-          .build();
-
-        await driver.manage().setTimeouts({
-          implicit: 5000,
-          pageLoad: 15000,
-          script: 15000
-        });
-
-        await driver.get("https://app.gradient.network/");
-        await driver.findElement(By.css('[placeholder="Enter Email"]')).sendKeys(USER);
-        await driver.findElement(By.css('[type="password"]')).sendKeys(PASSWORD);
-        await driver.findElement(By.css("button")).click();
-        await driver.wait(until.elementLocated(By.css('a[href="/dashboard/setting"]')), 15000);
-
-        await driver.get(`chrome-extension://${EXTENSION_ID}/popup.html`);
-        await driver.wait(until.elementLocated(By.xpath('//div[contains(text(), "Status")]')), 15000);
-
-        try {
-          await driver.findElement(By.xpath('//button[contains(text(), "I got it")]')).click();
-        } catch {}
+        console.log('重新连接中...');
+        if (!await initializeDriver()) {
+          break;
+        }
+        retryCount = 0;
       }
 
       const status = await driver.findElement(By.css(".absolute.mt-3.right-0.z-10")).getText();
@@ -136,13 +170,14 @@ async function main() {
         throw new Error("Disconnected");
       }
       
+      console.log('状态正常:', status);
       retryCount = 0;
       await new Promise(r => setTimeout(r, CHECK_INTERVAL));
 
     } catch (error) {
       if (isShuttingDown) break;
       
-      console.error('发生错误:', error);
+      console.error('发生错误:', error.message);
       if (driver) {
         try {
           await driver.quit();
@@ -156,8 +191,7 @@ async function main() {
         break;
       }
 
-      console.log(`${retryCount}/${MAX_RETRIES} 次重试，等待 ${RETRY_DELAY/1000} 秒...`);
-      await new Promise(r => setTimeout(r, RETRY_DELAY));
+      console.log(`开始第 ${retryCount}/${MAX_RETRIES} 次重试...`);
     }
   }
 }
