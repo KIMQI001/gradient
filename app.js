@@ -69,25 +69,29 @@ async function downloadExtension(extensionId) {
 }
 
 async function takeScreenshot(driver, filename) {
-  if (!ALLOW_DEBUG) {
-    return
+  if (!ALLOW_DEBUG) return;  // 如果不是调试模式，直接返回
+  try {
+    const data = await driver.takeScreenshot()
+    fs.writeFileSync(filename, Buffer.from(data, "base64"))
+  } catch (error) {
+    console.log('截图失败:', error);
   }
-
-  const data = await driver.takeScreenshot()
-  fs.writeFileSync(filename, Buffer.from(data, "base64"))
 }
 
 async function generateErrorReport(driver) {
-  const dom = await driver.findElement(By.css("html")).getAttribute("outerHTML")
-  fs.writeFileSync("error.html", dom)
-
-  await takeScreenshot(driver, "error.png")
-
-  const logs = await driver.manage().logs().get("browser")
-  fs.writeFileSync(
-    "error.log",
-    logs.map((log) => `${log.level.name}: ${log.message}`).join("\n")
-  )
+  if (!ALLOW_DEBUG) return;  // 如果不是调试模式，直接返回
+  try {
+    const dom = await driver.findElement(By.css("html")).getAttribute("outerHTML")
+    fs.writeFileSync("error.html", dom)
+    await takeScreenshot(driver, "error.png")
+    const logs = await driver.manage().logs().get("browser")
+    fs.writeFileSync(
+      "error.log",
+      logs.map((log) => `${log.level.name}: ${log.message}`).join("\n")
+    )
+  } catch (error) {
+    console.log('生成错误报告失败:', error);
+  }
 }
 
 async function getDriverOptions() {
@@ -322,30 +326,34 @@ async function clearBrowserData(driver) {
 
     console.log("-> 已启动!")
 
-    // 定期清理数据
+    let lastStatus = '';
     setInterval(async () => {
-      if (driver) {
-        await clearBrowserData(driver);
-      }
-    }, 5 * 60 * 1000); // 每5分钟清理一次
-
-    setInterval(async () => {
+      if (!driver) return;
+      
       try {
-        const title = await driver.getTitle()
+        // 清理浏览器数据
+        await clearBrowserData(driver);
         
-        // 重新获取 supportStatus
-        const statusElement = await driver.findElement(By.css(".absolute.mt-3.right-0.z-10"))
-        const currentStatus = await statusElement.getText()
-
-        if (PROXY) {
-          console.log(`-> [${USER}] 使用代理 ${PROXY} 运行中... (标题: ${title}, 状态: ${currentStatus})`)
-        } else {
-          console.log(`-> [${USER}] 未使用代理运行中... (标题: ${title}, 状态: ${currentStatus})`)
+        // 获取状态
+        const statusElement = await driver.findElement(By.css(".absolute.mt-3.right-0.z-10"));
+        const currentStatus = await statusElement.getText();
+        
+        // 只有状态变化时才打印日志
+        if (currentStatus !== lastStatus) {
+          const title = await driver.getTitle();
+          if (PROXY) {
+            console.log(`-> [${USER}] 使用代理 ${PROXY} 运行中... (标题: ${title}, 状态: ${currentStatus})`);
+          } else {
+            console.log(`-> [${USER}] 未使用代理运行中... (标题: ${title}, 状态: ${currentStatus})`);
+          }
+          lastStatus = currentStatus;
         }
       } catch (error) {
-        console.log("-> 状态更新失败:", error.message)
+        if (!error.message.includes('stale element')) {  // 忽略stale element错误
+          console.log("-> 状态更新失败:", error.message);
+        }
       }
-    }, 30000)
+    }, 30000);  // 30秒检查一次
   } catch (error) {
     console.error("发生错误:", error)
     console.error(error.stack)
