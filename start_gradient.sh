@@ -58,9 +58,9 @@ docker run -d \
     --restart on-failure:3 \
     --ulimit nofile=65535:65535 \
     --stop-timeout 30 \
-    --memory="256m" \
-    --memory-swap="512m" \
-    --cpus=0.5 \
+    --memory="500m" \
+    --memory-swap="1g" \
+    --cpus=1 \
     -e APP_USER="$email" \
     -e APP_PASS="$password" \
     -e NODE_ENV=development \
